@@ -22,12 +22,30 @@ async def run_bot():
     # Initialize database
     await init_db()
 
+    # Auto-seed database if empty
+    await auto_seed_if_empty()
+
     # Setup bot handlers
     setup_bot()
 
     # Start polling
     print("🤖 Starting Telegram bot...")
     await dp.start_polling(bot)
+
+
+async def auto_seed_if_empty():
+    """Automatically seed database if it's empty."""
+    from sqlalchemy import select
+    from src.database import async_session
+    from src.database.models import City
+
+    async with async_session() as session:
+        result = await session.execute(select(City))
+        if not result.scalars().first():
+            print("📦 Database is empty, seeding with demo data...")
+            await seed_database()
+        else:
+            print("✅ Database already has data")
 
 
 def run_api():
