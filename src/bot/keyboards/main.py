@@ -22,9 +22,6 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text="📅 Мои бронирования"),
                 KeyboardButton(text="👤 Профиль"),
             ],
-            [
-                KeyboardButton(text="🌐 Открыть приложение", web_app=WebAppInfo(url=settings.mini_app_url)),
-            ],
         ],
         resize_keyboard=True,
     )
@@ -43,12 +40,6 @@ def get_main_inline_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📅 Мои бронирования", callback_data="my_bookings"),
                 InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
             ],
-            [
-                InlineKeyboardButton(
-                    text="🌐 Открыть приложение",
-                    web_app=WebAppInfo(url=settings.mini_app_url),
-                ),
-            ],
         ]
     )
     return keyboard
@@ -57,14 +48,17 @@ def get_main_inline_keyboard() -> InlineKeyboardMarkup:
 def get_webapp_button(text: str = "🌐 Открыть приложение", path: str = "") -> InlineKeyboardMarkup:
     """Get WebApp button with optional path."""
     url = f"{settings.mini_app_url}{path}" if path else settings.mini_app_url
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=text,
-                    web_app=WebAppInfo(url=url),
-                ),
-            ],
-        ]
-    )
-    return keyboard
+    # Only return WebApp button if URL is HTTPS
+    if url.startswith("https://"):
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=text,
+                        web_app=WebAppInfo(url=url),
+                    ),
+                ],
+            ]
+        )
+        return keyboard
+    return None
