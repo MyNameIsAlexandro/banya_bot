@@ -291,6 +291,20 @@ async def show_owner_statistics(message: Message):
     await message.answer(text)
 
 
+@router.message(F.text == "👤 Профиль")
+async def show_owner_profile(message: Message):
+    """Show profile for owner (redirect to profile handler)."""
+    from src.bot.handlers.profile import show_profile
+    await show_profile(message)
+
+
+@router.message(F.text == "⚙️ Настройки")
+async def show_owner_settings(message: Message):
+    """Show settings for owner (redirect to profile with role switching)."""
+    from src.bot.handlers.profile import show_profile
+    await show_profile(message)
+
+
 @router.message(F.text == "➕ Добавить баню")
 async def start_add_banya(message: Message, state: FSMContext):
     """Start adding a new banya."""

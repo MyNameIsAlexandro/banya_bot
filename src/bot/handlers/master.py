@@ -648,6 +648,13 @@ async def contact_client(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.message(F.text == "⚙️ Настройки")
+async def show_master_settings(message: Message):
+    """Show settings for master (redirect to profile with role switching)."""
+    from src.bot.handlers.profile import show_profile
+    await show_profile(message)
+
+
 @router.callback_query(F.data == "toggle_home_visit")
 async def toggle_home_visit(callback: CallbackQuery):
     """Toggle home visit availability."""
