@@ -36,7 +36,26 @@ async def get_or_create_user(telegram_id: int, first_name: str, last_name: str |
         return user, is_new
 
 
-async def get_city_selection_keyboard() -> InlineKeyboardMarkup:
+def get_role_selection_keyboard() -> InlineKeyboardMarkup:
+    """Get keyboard for role selection."""
+    buttons = [
+        [InlineKeyboardButton(
+            text="👤 Я клиент — хочу бронировать бани",
+            callback_data="select_role_client"
+        )],
+        [InlineKeyboardButton(
+            text="🏢 Я владелец бани — хочу принимать брони",
+            callback_data="select_role_owner"
+        )],
+        [InlineKeyboardButton(
+            text="👨‍🍳 Я пар-мастер — хочу получать заказы",
+            callback_data="select_role_master"
+        )],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def get_city_selection_keyboard(back_button: bool = False) -> InlineKeyboardMarkup:
     """Get keyboard with available cities."""
     async with async_session() as session:
         result = await session.execute(select(City).order_by(City.name))
@@ -47,6 +66,12 @@ async def get_city_selection_keyboard() -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(
             text=f"🏙 {city.name}",
             callback_data=f"select_city_{city.id}"
+        )])
+
+    if back_button:
+        buttons.append([InlineKeyboardButton(
+            text="🔙 Назад",
+            callback_data="back_to_role_selection"
         )])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -62,25 +87,40 @@ async def cmd_start(message: Message):
         username=message.from_user.username,
     )
 
-    # If user has no city selected, ask to select one
-    if not user.city_id:
+    # New user - ask for role selection first
+    if is_new:
         welcome_text = f"""
 👋 Привет, <b>{user.first_name}</b>!
 
-Добро пожаловать в <b>Banya Bot</b> — твой помощник в поиске и бронировании бань!
+Добро пожаловать в <b>Banya Bot</b> — платформу для бронирования бань и услуг пар-мастеров!
 
-🏙 <b>Для начала выберите ваш город:</b>
+🎯 <b>Кто вы?</b>
 """
-        keyboard = await get_city_selection_keyboard()
-        await message.answer(welcome_text, reply_markup=keyboard)
+        await message.answer(welcome_text, reply_markup=get_role_selection_keyboard())
         return
 
-    welcome_text = f"""
+    # Existing user without city - ask for city
+    if not user.city_id:
+        keyboard = await get_city_selection_keyboard()
+        await message.answer(
+            "🏙 <b>Выберите ваш город:</b>",
+            reply_markup=keyboard
+        )
+        return
+
+    # Show appropriate menu based on role
+    await show_role_menu(message, user)
+
+
+async def show_role_menu(message: Message, user: User):
+    """Show menu based on user role."""
+    city_name = user.city.name if user.city else "Не выбран"
+
+    if user.role == UserRole.CLIENT:
+        welcome_text = f"""
 👋 Привет, <b>{user.first_name}</b>!
 
-Добро пожаловать в <b>Banya Bot</b> — твой помощник в поиске и бронировании бань!
-
-🏙 <b>Ваш город:</b> {user.city.name if user.city else 'Не выбран'}
+🏙 <b>Ваш город:</b> {city_name}
 
 🔥 <b>Что я умею:</b>
 • 🔍 Искать бани по городу и фильтрам
@@ -88,10 +128,98 @@ async def cmd_start(message: Message):
 • 📅 Бронировать онлайн
 • ⭐ Показывать рейтинги и отзывы
 
-Выбери действие в меню ниже или открой приложение для полного функционала!
+Выбери действие в меню ниже!
 """
+        await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
-    await message.answer(welcome_text, reply_markup=get_main_keyboard())
+    elif user.role == UserRole.BANYA_OWNER:
+        from src.bot.handlers.owner import get_owner_keyboard, get_owner_stats
+        stats = await get_owner_stats(user.id)
+        welcome_text = f"""
+👋 Привет, <b>{user.first_name}</b>!
+
+🏢 <b>Личный кабинет владельца бани</b>
+
+📊 <b>Статистика:</b>
+🏠 Ваших бань: {stats['banyas_count']}
+📅 Активных броней: {stats['active_bookings']}
+✅ Всего бронирований: {stats['total_bookings']}
+
+Выберите действие:
+"""
+        await message.answer(welcome_text, reply_markup=get_owner_keyboard())
+
+    elif user.role == UserRole.BATH_MASTER:
+        from src.bot.handlers.master import get_master_keyboard, get_master_stats
+        stats = await get_master_stats(user.id)
+        welcome_text = f"""
+👋 Привет, <b>{user.first_name}</b>!
+
+👨‍🍳 <b>Личный кабинет пар-мастера</b>
+
+📊 <b>Статистика:</b>
+📅 Активных заказов: {stats['active_bookings']}
+✅ Завершённых: {stats['completed_bookings']}
+⭐ Рейтинг: {stats['rating']:.1f} ({stats['rating_count']} отзывов)
+
+Выберите действие:
+"""
+        await message.answer(welcome_text, reply_markup=get_master_keyboard())
+
+
+@router.callback_query(F.data.startswith("select_role_"))
+async def handle_role_selection(callback: CallbackQuery):
+    """Handle role selection."""
+    role_str = callback.data.replace("select_role_", "")
+
+    role_map = {
+        "client": UserRole.CLIENT,
+        "owner": UserRole.BANYA_OWNER,
+        "master": UserRole.BATH_MASTER,
+    }
+
+    role = role_map.get(role_str)
+    if not role:
+        await callback.answer("Неизвестная роль", show_alert=True)
+        return
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = result.scalar_one_or_none()
+
+        if user:
+            user.role = role
+            await session.commit()
+
+    role_names = {
+        UserRole.CLIENT: "👤 Клиент",
+        UserRole.BANYA_OWNER: "🏢 Владелец бани",
+        UserRole.BATH_MASTER: "👨‍🍳 Пар-мастер",
+    }
+
+    await callback.message.edit_text(
+        f"✅ Отлично! Вы зарегистрированы как: <b>{role_names[role]}</b>\n\n"
+        f"🏙 Теперь выберите ваш город:"
+    )
+
+    keyboard = await get_city_selection_keyboard(back_button=True)
+    await callback.message.answer(
+        "👇 Нажмите на ваш город:",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "back_to_role_selection")
+async def handle_back_to_role(callback: CallbackQuery):
+    """Go back to role selection."""
+    await callback.message.edit_text(
+        "🎯 <b>Кто вы?</b>",
+        reply_markup=get_role_selection_keyboard()
+    )
+    await callback.answer()
 
 
 @router.message(Command("help"))
