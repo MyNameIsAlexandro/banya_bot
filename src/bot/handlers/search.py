@@ -217,8 +217,10 @@ async def search_masters(message: Message):
         )
         return
 
-    text = "👨‍🍳 <b>Лучшие пар-мастера:</b>\n\n"
+    # Create inline keyboard with masters
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+    buttons = []
     for master in masters:
         rating_stars = "⭐" * int(master.rating)
         specializations = []
@@ -232,20 +234,104 @@ async def search_masters(message: Message):
             specializations.append("💆")
 
         specs_text = " ".join(specializations) if specializations else ""
+        text = f"{master.user.first_name} {specs_text} {rating_stars}"
 
-        text += (
-            f"<b>{master.user.first_name}</b> {specs_text}\n"
-            f"{rating_stars} {master.rating:.1f} • {master.experience_years} лет опыта\n"
-            f"💰 {master.price_per_session} ₽ / {master.session_duration_minutes} мин\n\n"
-        )
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"view_master_{master.id}"
+        )])
 
-    await message.answer(text)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer(
+        "👨‍🍳 <b>Лучшие пар-мастера:</b>\n\n"
+        "Выберите мастера для подробностей:",
+        reply_markup=keyboard
+    )
 
 
 @router.callback_query(F.data == "search_masters")
 async def search_masters_callback(callback: CallbackQuery):
     """Handle search masters callback."""
     await search_masters(callback.message)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("view_master_"))
+async def view_master_detail(callback: CallbackQuery):
+    """Show detailed info about a bath master."""
+    master_id = int(callback.data.split("_")[2])
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(BathMaster)
+            .options(selectinload(BathMaster.user), selectinload(BathMaster.banyas))
+            .where(BathMaster.id == master_id)
+        )
+        master = result.scalar_one_or_none()
+
+    if not master:
+        await callback.answer("Мастер не найден", show_alert=True)
+        return
+
+    # Build specializations text
+    specs = []
+    if master.specializes_russian:
+        specs.append("🇷🇺 Русская баня")
+    if master.specializes_finnish:
+        specs.append("🇫🇮 Финская сауна")
+    if master.specializes_hammam:
+        specs.append("🇹🇷 Хаммам")
+    if master.specializes_scrub:
+        specs.append("🧴 Скрабирование")
+    if master.specializes_massage:
+        specs.append("💆 Массаж")
+    if master.specializes_aromatherapy:
+        specs.append("🌿 Ароматерапия")
+
+    rating_stars = "⭐" * int(master.rating)
+
+    # Build banyas list
+    banyas_text = ""
+    if master.banyas:
+        banya_names = [b.name for b in master.banyas if b.is_active]
+        banyas_text = f"\n\n🧖 <b>Работает в:</b>\n" + "\n".join(f"• {name}" for name in banya_names)
+
+    # Home visit info
+    home_visit_text = ""
+    if master.can_visit_home:
+        home_visit_text = f"\n🏠 <b>Выезд на дом:</b> {master.home_visit_price} ₽"
+
+    text = f"""
+👨‍🍳 <b>{master.user.first_name}</b>
+
+{rating_stars} <b>{master.rating:.1f}</b> ({master.rating_count} отзывов)
+📅 Опыт: {master.experience_years} лет
+
+💰 <b>В бане:</b> {master.price_per_session} ₽ / {master.session_duration_minutes} мин{home_visit_text}
+
+✨ <b>Специализации:</b>
+{chr(10).join(specs) if specs else "Не указаны"}{banyas_text}
+"""
+
+    if master.bio:
+        text += f"\n\n📝 {master.bio}"
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    buttons = [
+        [InlineKeyboardButton(
+            text="📅 Забронировать мастера",
+            callback_data=f"book_master_{master_id}"
+        )],
+        [InlineKeyboardButton(
+            text="🔙 К списку мастеров",
+            callback_data="search_masters"
+        )],
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
     await callback.answer()
 
 

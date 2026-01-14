@@ -1,5 +1,16 @@
 from src.database.connection import get_db, init_db, engine, async_session
-from src.database.models import Base, User, Banya, BathMaster, Booking, Review, BanyaPhoto, City
+from src.database.models import (
+    Base,
+    User,
+    Banya,
+    BathMaster,
+    Booking,
+    Review,
+    BanyaPhoto,
+    City,
+    BookingStatus,
+    BookingType,
+)
 
 __all__ = [
     "get_db",
@@ -14,4 +25,6 @@ __all__ = [
     "Review",
     "BanyaPhoto",
     "City",
+    "BookingStatus",
+    "BookingType",
 ]

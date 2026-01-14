@@ -111,9 +111,11 @@ banya_bot/
 |------|----------|
 | `bio` | Описание |
 | `experience_years` | Опыт (лет) |
-| `price_per_session` | Цена за сеанс |
+| `price_per_session` | Цена за сеанс в бане |
 | `session_duration_minutes` | Длительность сеанса |
 | `specializes_*` | Специализации (russian, finnish, hammam, scrub, massage, aromatherapy) |
+| `can_visit_home` | Выезжает на дом |
+| `home_visit_price` | Цена выезда на дом |
 | `rating` | Рейтинг |
 
 ### Booking (Бронирование)
@@ -126,6 +128,17 @@ banya_bot/
 | `guests_count` | Количество гостей |
 | `total_price` | Итоговая цена |
 | `status` | Статус: `pending`, `confirmed`, `cancelled`, `completed` |
+| `booking_type` | Тип: `banya_only`, `banya_with_master`, `master_at_banya`, `master_home_visit` |
+| `client_address` | Адрес клиента (для выезда мастера) |
+
+## Сценарии бронирования
+
+| Тип | Описание | Поток |
+|-----|----------|-------|
+| `banya_only` | Только баня | Баня → Дата → Время → Длительность → Подтверждение |
+| `banya_with_master` | Баня + мастер | Баня → ... → "Добавить мастера?" → Выбор мастера → Подтверждение |
+| `master_at_banya` | Мастер в бане | Мастер → "В баню" → Выбор бани → Дата → Время → Подтверждение |
+| `master_home_visit` | Мастер на дом | Мастер → "Ко мне" → Дата → Время → Адрес → Подтверждение |
 
 ## Команды бота
 

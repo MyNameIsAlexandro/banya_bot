@@ -31,6 +31,15 @@ class BookingStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class BookingType(str, Enum):
+    """Booking type enumeration."""
+
+    BANYA_ONLY = "banya_only"           # Только баня, без мастера
+    BANYA_WITH_MASTER = "banya_with_master"  # Баня + пар-мастер
+    MASTER_AT_BANYA = "master_at_banya"      # Мастер в бане (выбор начался с мастера)
+    MASTER_HOME_VISIT = "master_home_visit"  # Мастер выезжает к клиенту
+
+
 class UserRole(str, Enum):
     """User role enumeration."""
 
@@ -197,6 +206,8 @@ class BathMaster(Base):
 
     # Availability
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_visit_home: Mapped[bool] = mapped_column(Boolean, default=False)  # Выезд к клиенту
+    home_visit_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)  # Цена выезда
 
     # Ratings
     rating: Mapped[float] = mapped_column(Float, default=5.0)
@@ -234,9 +245,14 @@ class Booking(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    banya_id: Mapped[int] = mapped_column(ForeignKey("banyas.id"))
+    banya_id: Mapped[Optional[int]] = mapped_column(ForeignKey("banyas.id"), nullable=True)  # Nullable для выезда мастера
     bath_master_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("bath_masters.id"), nullable=True
+    )
+
+    # Booking type
+    booking_type: Mapped[BookingType] = mapped_column(
+        SQLEnum(BookingType), default=BookingType.BANYA_ONLY
     )
 
     # Booking details
@@ -245,8 +261,11 @@ class Booking(Base):
     duration_hours: Mapped[int] = mapped_column(Integer)
     guests_count: Mapped[int] = mapped_column(Integer, default=1)
 
+    # Client address for home visits
+    client_address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
     # Pricing
-    banya_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    banya_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)  # Nullable для выезда
     master_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2), nullable=True)
     total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2))
 

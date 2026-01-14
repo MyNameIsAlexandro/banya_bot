@@ -296,12 +296,14 @@ async def seed_database():
         masters = [
             BathMaster(
                 user_id=masters_users[0].id,
-                bio="15 лет опыта в русской бане. Мастер дубового и берёзового веника.",
+                bio="15 лет опыта в русской бане. Мастер дубового и берёзового веника. Выезжаю на дом!",
                 experience_years=15,
                 price_per_session=Decimal("3000"),
                 session_duration_minutes=60,
                 specializes_russian=True,
                 specializes_massage=True,
+                can_visit_home=True,
+                home_visit_price=Decimal("5000"),
                 rating=4.9,
                 rating_count=89,
             ),
@@ -314,23 +316,48 @@ async def seed_database():
                 specializes_russian=True,
                 specializes_finnish=True,
                 specializes_aromatherapy=True,
+                can_visit_home=False,
                 rating=4.7,
                 rating_count=56,
             ),
             BathMaster(
                 user_id=masters_users[2].id,
-                bio="Профессиональный мастер хаммама. Обучался в Турции.",
+                bio="Профессиональный мастер хаммама. Обучался в Турции. Возможен выезд.",
                 experience_years=10,
                 price_per_session=Decimal("3500"),
                 session_duration_minutes=90,
                 specializes_hammam=True,
                 specializes_scrub=True,
                 specializes_massage=True,
+                can_visit_home=True,
+                home_visit_price=Decimal("6000"),
                 rating=4.8,
                 rating_count=72,
             ),
         ]
         session.add_all(masters)
+        await session.flush()
+
+        # Get all banyas to link masters
+        from sqlalchemy import select as sa_select
+        banyas_result = await session.execute(sa_select(Banya))
+        all_banyas = banyas_result.scalars().all()
+
+        # Link masters to banyas (create associations)
+        from src.database.models import BanyaBathMaster
+
+        # Master 0 (Иван) works in Moscow banyas (first 2)
+        for banya in all_banyas[:2]:
+            session.add(BanyaBathMaster(banya_id=banya.id, bath_master_id=masters[0].id))
+
+        # Master 1 (Сергей) works in SPb banyas (3-4)
+        for banya in all_banyas[2:4]:
+            session.add(BanyaBathMaster(banya_id=banya.id, bath_master_id=masters[1].id))
+
+        # Master 2 (Ахмед) works in multiple cities (hammam specialist)
+        for banya in all_banyas:
+            if banya.has_hammam:
+                session.add(BanyaBathMaster(banya_id=banya.id, bath_master_id=masters[2].id))
 
         await session.commit()
 
@@ -338,6 +365,7 @@ async def seed_database():
         print(f"   - {len(cities)} cities")
         print(f"   - {len(banyas_data)} banyas")
         print(f"   - {len(masters)} bath masters")
+        print(f"   - Masters linked to banyas")
 
 
 def main():
