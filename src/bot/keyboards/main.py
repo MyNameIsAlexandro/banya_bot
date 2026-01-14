@@ -12,17 +12,28 @@ settings = get_settings()
 
 def get_main_keyboard() -> ReplyKeyboardMarkup:
     """Get main menu reply keyboard."""
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text="🔍 Найти баню"),
-                KeyboardButton(text="👨‍🍳 Пар-мастера"),
-            ],
-            [
-                KeyboardButton(text="📅 Мои бронирования"),
-                KeyboardButton(text="👤 Профиль"),
-            ],
+    buttons = [
+        [
+            KeyboardButton(text="🔍 Найти баню"),
+            KeyboardButton(text="👨‍🍳 Пар-мастера"),
         ],
+        [
+            KeyboardButton(text="📅 Мои бронирования"),
+            KeyboardButton(text="👤 Профиль"),
+        ],
+    ]
+
+    # Add WebApp button only if HTTPS URL is configured
+    if settings.mini_app_url.startswith("https://"):
+        buttons.append([
+            KeyboardButton(
+                text="🌐 Открыть приложение",
+                web_app=WebAppInfo(url=settings.mini_app_url)
+            ),
+        ])
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=buttons,
         resize_keyboard=True,
     )
     return keyboard
@@ -30,18 +41,27 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
 
 def get_main_inline_keyboard() -> InlineKeyboardMarkup:
     """Get main menu inline keyboard."""
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔍 Найти баню", callback_data="search_banya"),
-                InlineKeyboardButton(text="👨‍🍳 Пар-мастера", callback_data="search_masters"),
-            ],
-            [
-                InlineKeyboardButton(text="📅 Мои бронирования", callback_data="my_bookings"),
-                InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
-            ],
-        ]
-    )
+    buttons = [
+        [
+            InlineKeyboardButton(text="🔍 Найти баню", callback_data="search_banya"),
+            InlineKeyboardButton(text="👨‍🍳 Пар-мастера", callback_data="search_masters"),
+        ],
+        [
+            InlineKeyboardButton(text="📅 Мои бронирования", callback_data="my_bookings"),
+            InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+        ],
+    ]
+
+    # Add WebApp button only if HTTPS URL is configured
+    if settings.mini_app_url.startswith("https://"):
+        buttons.append([
+            InlineKeyboardButton(
+                text="🌐 Открыть приложение",
+                web_app=WebAppInfo(url=settings.mini_app_url),
+            ),
+        ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     return keyboard
 
 
