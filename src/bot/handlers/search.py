@@ -1,10 +1,10 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from src.database import async_session, City, Banya, BathMaster
+from src.database import async_session, City, Banya, BathMaster, User
 from src.bot.keyboards.booking import (
     get_cities_keyboard,
     get_banya_list_keyboard,
@@ -16,46 +16,110 @@ router = Router(name="search")
 ITEMS_PER_PAGE = 5
 
 
+async def get_user_city(telegram_id: int) -> tuple[int | None, str | None]:
+    """Get user's city id and name."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(User).options(selectinload(User.city)).where(User.telegram_id == telegram_id)
+        )
+        user = result.scalar_one_or_none()
+        if user and user.city:
+            return user.city_id, user.city.name
+        return None, None
+
+
 @router.message(Command("search"))
 async def start_search(message: Message):
     """Start banya search."""
-    async with async_session() as session:
-        result = await session.execute(select(City).order_by(City.name))
-        cities = result.scalars().all()
+    city_id, city_name = await get_user_city(message.from_user.id)
 
-    if not cities:
+    if not city_id:
+        # User has no city selected - ask to select
         await message.answer(
-            "🏙 Пока нет доступных городов.\n"
-            "Скоро мы добавим больше локаций!"
+            "🏙 Сначала выберите ваш город в настройках профиля или через /start"
         )
         return
 
+    async with async_session() as session:
+        # Get banyas in user's city
+        result = await session.execute(
+            select(Banya)
+            .where(Banya.city_id == city_id, Banya.is_active == True)
+            .order_by(Banya.rating.desc())
+            .limit(ITEMS_PER_PAGE)
+        )
+        banyas = result.scalars().all()
+
+        # Count total
+        count_result = await session.execute(
+            select(Banya)
+            .where(Banya.city_id == city_id, Banya.is_active == True)
+        )
+        total = len(count_result.scalars().all())
+
+    if not banyas:
+        await message.answer(
+            f"🏙 <b>{city_name}</b>\n\n"
+            "😔 К сожалению, в вашем городе пока нет доступных бань.\n"
+            "Попробуйте сменить город в профиле.",
+        )
+        return
+
+    total_pages = (total + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+
     await message.answer(
-        "🏙 <b>Выберите город:</b>\n\n"
-        "Мы покажем лучшие бани в вашем городе.",
-        reply_markup=get_cities_keyboard(cities),
+        f"🏙 <b>{city_name}</b>\n\n"
+        f"🔥 Найдено бань: {total}\n"
+        "Выберите баню для подробностей:",
+        reply_markup=get_banya_list_keyboard(banyas, page=0, total_pages=total_pages),
     )
 
 
 @router.callback_query(F.data == "search_banya")
 async def search_banya_callback(callback: CallbackQuery):
     """Handle search banya callback."""
-    async with async_session() as session:
-        result = await session.execute(select(City).order_by(City.name))
-        cities = result.scalars().all()
+    city_id, city_name = await get_user_city(callback.from_user.id)
 
-    if not cities:
+    if not city_id:
         await callback.message.edit_text(
-            "🏙 Пока нет доступных городов.\n"
-            "Скоро мы добавим больше локаций!"
+            "🏙 Сначала выберите ваш город в настройках профиля или через /start"
         )
         await callback.answer()
         return
 
+    async with async_session() as session:
+        # Get banyas in user's city
+        result = await session.execute(
+            select(Banya)
+            .where(Banya.city_id == city_id, Banya.is_active == True)
+            .order_by(Banya.rating.desc())
+            .limit(ITEMS_PER_PAGE)
+        )
+        banyas = result.scalars().all()
+
+        # Count total
+        count_result = await session.execute(
+            select(Banya)
+            .where(Banya.city_id == city_id, Banya.is_active == True)
+        )
+        total = len(count_result.scalars().all())
+
+    if not banyas:
+        await callback.message.edit_text(
+            f"🏙 <b>{city_name}</b>\n\n"
+            "😔 К сожалению, в вашем городе пока нет доступных бань.\n"
+            "Попробуйте сменить город в профиле.",
+        )
+        await callback.answer()
+        return
+
+    total_pages = (total + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+
     await callback.message.edit_text(
-        "🏙 <b>Выберите город:</b>\n\n"
-        "Мы покажем лучшие бани в вашем городе.",
-        reply_markup=get_cities_keyboard(cities),
+        f"🏙 <b>{city_name}</b>\n\n"
+        f"🔥 Найдено бань: {total}\n"
+        "Выберите баню для подробностей:",
+        reply_markup=get_banya_list_keyboard(banyas, page=0, total_pages=total_pages),
     )
     await callback.answer()
 
@@ -198,12 +262,38 @@ async def handle_banya_selection(callback: CallbackQuery):
 
 @router.message(Command("masters"))
 async def search_masters(message: Message):
-    """Search for bath masters."""
+    """Search for bath masters in user's city."""
+    city_id, city_name = await get_user_city(message.from_user.id)
+
+    if not city_id:
+        await message.answer(
+            "🏙 Сначала выберите ваш город в настройках профиля или через /start"
+        )
+        return
+
     async with async_session() as session:
+        # Get masters who work in banyas in user's city OR can visit home
+        # First get all banya IDs in user's city
+        banyas_result = await session.execute(
+            select(Banya.id).where(Banya.city_id == city_id, Banya.is_active == True)
+        )
+        banya_ids = [b for b in banyas_result.scalars().all()]
+
+        # Get masters who work in these banyas
+        from src.database.models import BanyaBathMaster
+        masters_in_city_result = await session.execute(
+            select(BanyaBathMaster.bath_master_id).where(BanyaBathMaster.banya_id.in_(banya_ids))
+        )
+        master_ids_in_city = set(masters_in_city_result.scalars().all())
+
+        # Get all masters who work in city banyas or can visit home
         result = await session.execute(
             select(BathMaster)
             .options(selectinload(BathMaster.user))
-            .where(BathMaster.is_available == True)
+            .where(
+                BathMaster.is_available == True,
+                (BathMaster.id.in_(master_ids_in_city) | (BathMaster.can_visit_home == True))
+            )
             .order_by(BathMaster.rating.desc())
             .limit(10)
         )
@@ -211,14 +301,11 @@ async def search_masters(message: Message):
 
     if not masters:
         await message.answer(
-            "👨‍🍳 <b>Пар-мастера</b>\n\n"
-            "Пока нет доступных мастеров.\n"
-            "Скоро мы добавим лучших специалистов!"
+            f"👨‍🍳 <b>Пар-мастера в г. {city_name}</b>\n\n"
+            "Пока нет доступных мастеров в вашем городе.\n"
+            "Попробуйте сменить город в профиле."
         )
         return
-
-    # Create inline keyboard with masters
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
     buttons = []
     for master in masters:
@@ -234,7 +321,8 @@ async def search_masters(message: Message):
             specializations.append("💆")
 
         specs_text = " ".join(specializations) if specializations else ""
-        text = f"{master.user.first_name} {specs_text} {rating_stars}"
+        home_badge = "🏠" if master.can_visit_home else ""
+        text = f"{master.user.first_name} {specs_text} {home_badge} {rating_stars}"
 
         buttons.append([InlineKeyboardButton(
             text=text,
@@ -244,7 +332,8 @@ async def search_masters(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await message.answer(
-        "👨‍🍳 <b>Лучшие пар-мастера:</b>\n\n"
+        f"👨‍🍳 <b>Пар-мастера в г. {city_name}:</b>\n\n"
+        "🏠 — выезжает на дом\n\n"
         "Выберите мастера для подробностей:",
         reply_markup=keyboard
     )
@@ -253,7 +342,79 @@ async def search_masters(message: Message):
 @router.callback_query(F.data == "search_masters")
 async def search_masters_callback(callback: CallbackQuery):
     """Handle search masters callback."""
-    await search_masters(callback.message)
+    city_id, city_name = await get_user_city(callback.from_user.id)
+
+    if not city_id:
+        await callback.message.edit_text(
+            "🏙 Сначала выберите ваш город в настройках профиля или через /start"
+        )
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        # Get masters who work in banyas in user's city OR can visit home
+        banyas_result = await session.execute(
+            select(Banya.id).where(Banya.city_id == city_id, Banya.is_active == True)
+        )
+        banya_ids = [b for b in banyas_result.scalars().all()]
+
+        from src.database.models import BanyaBathMaster
+        masters_in_city_result = await session.execute(
+            select(BanyaBathMaster.bath_master_id).where(BanyaBathMaster.banya_id.in_(banya_ids))
+        )
+        master_ids_in_city = set(masters_in_city_result.scalars().all())
+
+        result = await session.execute(
+            select(BathMaster)
+            .options(selectinload(BathMaster.user))
+            .where(
+                BathMaster.is_available == True,
+                (BathMaster.id.in_(master_ids_in_city) | (BathMaster.can_visit_home == True))
+            )
+            .order_by(BathMaster.rating.desc())
+            .limit(10)
+        )
+        masters = result.scalars().all()
+
+    if not masters:
+        await callback.message.edit_text(
+            f"👨‍🍳 <b>Пар-мастера в г. {city_name}</b>\n\n"
+            "Пока нет доступных мастеров в вашем городе.\n"
+            "Попробуйте сменить город в профиле."
+        )
+        await callback.answer()
+        return
+
+    buttons = []
+    for master in masters:
+        rating_stars = "⭐" * int(master.rating)
+        specializations = []
+        if master.specializes_russian:
+            specializations.append("🇷🇺")
+        if master.specializes_finnish:
+            specializations.append("🇫🇮")
+        if master.specializes_hammam:
+            specializations.append("🇹🇷")
+        if master.specializes_massage:
+            specializations.append("💆")
+
+        specs_text = " ".join(specializations) if specializations else ""
+        home_badge = "🏠" if master.can_visit_home else ""
+        text = f"{master.user.first_name} {specs_text} {home_badge} {rating_stars}"
+
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"view_master_{master.id}"
+        )])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.edit_text(
+        f"👨‍🍳 <b>Пар-мастера в г. {city_name}:</b>\n\n"
+        "🏠 — выезжает на дом\n\n"
+        "Выберите мастера для подробностей:",
+        reply_markup=keyboard
+    )
     await callback.answer()
 
 

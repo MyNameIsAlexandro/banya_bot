@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 
 from src.database import async_session, User, Booking
 from src.database.models import BookingStatus
@@ -13,9 +14,9 @@ router = Router(name="profile")
 async def show_profile(message: Message):
     """Show user profile."""
     async with async_session() as session:
-        # Get user
+        # Get user with city
         result = await session.execute(
-            select(User).where(User.telegram_id == message.from_user.id)
+            select(User).options(selectinload(User.city)).where(User.telegram_id == message.from_user.id)
         )
         user = result.scalar_one_or_none()
 
@@ -42,11 +43,13 @@ async def show_profile(message: Message):
 
     rating_stars = "⭐" * int(user.rating)
     premium_badge = "👑 Premium" if user.is_premium else ""
+    city_name = user.city.name if user.city else "Не выбран"
 
     text = f"""
 👤 <b>Мой профиль</b> {premium_badge}
 
 📛 <b>Имя:</b> {user.first_name} {user.last_name or ''}
+🏙 <b>Город:</b> {city_name}
 📱 <b>Телефон:</b> {user.phone or 'Не указан'}
 🔗 <b>Username:</b> @{user.username or 'Не указан'}
 
@@ -63,6 +66,9 @@ async def show_profile(message: Message):
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🏙 Сменить город", callback_data="change_city"),
+            ],
             [
                 InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit_phone"),
             ],

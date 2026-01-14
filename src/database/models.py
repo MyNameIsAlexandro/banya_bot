@@ -60,6 +60,7 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String(255))
     last_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    city_id: Mapped[Optional[int]] = mapped_column(ForeignKey("cities.id"), nullable=True)  # Выбранный город
     role: Mapped[UserRole] = mapped_column(SQLEnum(UserRole), default=UserRole.CLIENT)
     is_premium: Mapped[bool] = mapped_column(Boolean, default=False)
     rating: Mapped[float] = mapped_column(Float, default=5.0)
@@ -70,6 +71,7 @@ class User(Base):
     )
 
     # Relationships
+    city: Mapped[Optional["City"]] = relationship("City", backref="users")
     bookings: Mapped[List["Booking"]] = relationship(
         "Booking", back_populates="user", foreign_keys="Booking.user_id"
     )

@@ -51,7 +51,7 @@ def generate_time_slots(opening: str, closing: str, duration_hours: int = 2) -> 
 
 # ==================== BANYA BOOKING FLOW ====================
 
-@router.callback_query(F.data.startswith("book_"))
+@router.callback_query(F.data.regexp(r"^book_\d+$"))
 async def start_booking(callback: CallbackQuery, state: FSMContext):
     """Start booking process for a banya."""
     banya_id = int(callback.data.split("_")[1])
@@ -495,10 +495,18 @@ async def master_home_visit(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("master_banya_"), MasterBookingStates.selecting_location)
 async def master_select_banya(callback: CallbackQuery, state: FSMContext):
-    """Show banyas where master works."""
+    """Show banyas where master works (filtered by user's city)."""
     master_id = int(callback.data.split("_")[2])
 
     async with async_session() as session:
+        # Get user's city
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == callback.from_user.id)
+        )
+        user = user_result.scalar_one_or_none()
+        user_city_id = user.city_id if user else None
+
+        # Get master with banyas
         result = await session.execute(
             select(BathMaster)
             .options(selectinload(BathMaster.banyas))
@@ -510,10 +518,22 @@ async def master_select_banya(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Бани не найдены", show_alert=True)
             return
 
+        # Filter banyas by user's city
+        banyas_in_city = [
+            b for b in master.banyas
+            if b.is_active and (not user_city_id or b.city_id == user_city_id)
+        ]
+
+    if not banyas_in_city:
+        await callback.message.edit_text(
+            "😔 К сожалению, этот мастер не работает в банях вашего города.\n"
+            "Вы можете пригласить его на дом или сменить город в профиле."
+        )
+        await callback.answer()
+        return
+
     buttons = []
-    for banya in master.banyas:
-        if not banya.is_active:
-            continue
+    for banya in banyas_in_city:
         rating_stars = "⭐" * int(banya.rating)
         text = f"{banya.name} {rating_stars}"
         buttons.append([InlineKeyboardButton(
