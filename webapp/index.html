@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Banya Bot</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>🔥 Banya Bot</h1>
+            <p class="subtitle">Найди и забронируй баню</p>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="search">🔍 Поиск</button>
+            <button class="nav-tab" data-tab="bookings">📅 Брони</button>
+            <button class="nav-tab" data-tab="profile">👤 Профиль</button>
+        </nav>
+
+        <!-- Search Tab -->
+        <div id="search-tab" class="tab-content active">
+            <!-- City selector -->
+            <div class="section">
+                <label class="section-title">Город</label>
+                <select id="city-select" class="select-input">
+                    <option value="">Выберите город</option>
+                </select>
+            </div>
+
+            <!-- Filters -->
+            <div class="section">
+                <label class="section-title">Фильтры</label>
+                <div class="filters">
+                    <label class="filter-chip">
+                        <input type="checkbox" id="filter-russian">
+                        <span>🇷🇺 Русская</span>
+                    </label>
+                    <label class="filter-chip">
+                        <input type="checkbox" id="filter-finnish">
+                        <span>🇫🇮 Финская</span>
+                    </label>
+                    <label class="filter-chip">
+                        <input type="checkbox" id="filter-hammam">
+                        <span>🇹🇷 Хаммам</span>
+                    </label>
+                    <label class="filter-chip">
+                        <input type="checkbox" id="filter-pool">
+                        <span>🏊 Бассейн</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="section">
+                <label class="section-title">Результаты</label>
+                <div id="banyas-list" class="banyas-list">
+                    <div class="loading">Загрузка...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Banya Detail Modal -->
+        <div id="banya-modal" class="modal hidden">
+            <div class="modal-content">
+                <button class="modal-close" onclick="closeModal()">×</button>
+                <div id="banya-detail"></div>
+            </div>
+        </div>
+
+        <!-- Booking Modal -->
+        <div id="booking-modal" class="modal hidden">
+            <div class="modal-content">
+                <button class="modal-close" onclick="closeBookingModal()">×</button>
+                <div id="booking-form"></div>
+            </div>
+        </div>
+
+        <!-- Bookings Tab -->
+        <div id="bookings-tab" class="tab-content">
+            <div id="bookings-list" class="bookings-list">
+                <div class="loading">Загрузка...</div>
+            </div>
+        </div>
+
+        <!-- Profile Tab -->
+        <div id="profile-tab" class="tab-content">
+            <div id="profile-content" class="profile-content">
+                <div class="loading">Загрузка...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
