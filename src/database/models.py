@@ -25,10 +25,20 @@ class Base(DeclarativeBase):
 class BookingStatus(str, Enum):
     """Booking status enumeration."""
 
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
+    PENDING = "pending"  # Client created, not yet confirmed
+    AWAITING_CONFIRMATIONS = "awaiting_confirmations"  # Client confirmed, awaiting banya/master
+    CONFIRMED = "confirmed"  # All parties confirmed
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+
+
+class CancelledBy(str, Enum):
+    """Who cancelled the booking."""
+
+    CLIENT = "client"
+    BANYA = "banya"
+    BATH_MASTER = "bath_master"
+    ADMIN = "admin"
 
 
 class BookingType(str, Enum):
@@ -275,6 +285,17 @@ class Booking(Base):
     status: Mapped[BookingStatus] = mapped_column(
         SQLEnum(BookingStatus), default=BookingStatus.PENDING
     )
+
+    # Confirmation tracking
+    client_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    banya_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    master_confirmed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)  # None if no master
+
+    # Cancellation tracking
+    cancelled_by: Mapped[Optional[CancelledBy]] = mapped_column(
+        SQLEnum(CancelledBy), nullable=True
+    )
+    cancellation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Notes
     user_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

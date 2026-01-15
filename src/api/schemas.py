@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional, List
 from pydantic import BaseModel
 
-from src.database.models import BookingStatus, UserRole
+from src.database.models import BookingStatus, BookingType, UserRole, CancelledBy
 
 
 # User schemas
@@ -150,16 +150,25 @@ class BookingCreate(BaseModel):
 class BookingResponse(BaseModel):
     id: int
     user_id: int
-    banya_id: int
+    banya_id: Optional[int]
     bath_master_id: Optional[int]
+    booking_type: BookingType
     date: datetime
     start_time: str
     duration_hours: int
     guests_count: int
-    banya_price: Decimal
+    client_address: Optional[str]
+    banya_price: Optional[Decimal]
     master_price: Optional[Decimal]
     total_price: Decimal
     status: BookingStatus
+    # Confirmation tracking
+    client_confirmed: bool
+    banya_confirmed: bool
+    master_confirmed: Optional[bool]
+    # Cancellation tracking
+    cancelled_by: Optional[CancelledBy]
+    cancellation_reason: Optional[str]
     user_notes: Optional[str]
     created_at: datetime
 

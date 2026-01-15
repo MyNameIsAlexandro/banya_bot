@@ -10,6 +10,7 @@ from src.database.models import (
     City,
     BookingStatus,
     BookingType,
+    CancelledBy,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "City",
     "BookingStatus",
     "BookingType",
+    "CancelledBy",
 ]

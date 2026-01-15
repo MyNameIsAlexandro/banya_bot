@@ -190,6 +190,7 @@ async def show_owner_bookings(message: Message):
 
     status_emoji = {
         BookingStatus.PENDING: "⏳",
+        BookingStatus.AWAITING_CONFIRMATIONS: "🔄",
         BookingStatus.CONFIRMED: "✅",
         BookingStatus.CANCELLED: "❌",
         BookingStatus.COMPLETED: "✔️",
@@ -197,13 +198,25 @@ async def show_owner_bookings(message: Message):
 
     # Group by status
     pending = [b for b in bookings if b.status == BookingStatus.PENDING]
+    awaiting = [b for b in bookings if b.status == BookingStatus.AWAITING_CONFIRMATIONS]
     confirmed = [b for b in bookings if b.status == BookingStatus.CONFIRMED]
-    other = [b for b in bookings if b.status not in [BookingStatus.PENDING, BookingStatus.CONFIRMED]]
+    other = [b for b in bookings if b.status not in [BookingStatus.PENDING, BookingStatus.AWAITING_CONFIRMATIONS, BookingStatus.CONFIRMED]]
 
     text = "📅 <b>Бронирования:</b>\n\n"
 
+    if awaiting:
+        text += "🔄 <b>Ожидают вашего подтверждения:</b>\n"
+        for b in awaiting[:5]:
+            date_str = b.date.strftime("%d.%m.%Y")
+            confirmed_status = "✅" if b.banya_confirmed else "⏳"
+            text += (
+                f"  #{b.id} {b.banya.name} {confirmed_status}\n"
+                f"  👤 {b.user.first_name} • {date_str} {b.start_time}\n"
+                f"  💰 {b.total_price} ₽\n\n"
+            )
+
     if pending:
-        text += "⏳ <b>Ожидают подтверждения:</b>\n"
+        text += "⏳ <b>Ожидают подтверждения клиента:</b>\n"
         for b in pending[:5]:
             date_str = b.date.strftime("%d.%m.%Y")
             text += (
@@ -222,19 +235,21 @@ async def show_owner_bookings(message: Message):
             )
 
     buttons = []
-    for b in pending[:5]:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"✅ Подтвердить #{b.id}",
-                callback_data=f"owner_confirm_{b.id}"
-            ),
-            InlineKeyboardButton(
-                text=f"❌ Отклонить",
-                callback_data=f"owner_reject_{b.id}"
-            ),
-        ])
+    # Show confirm/reject buttons for awaiting bookings (not yet confirmed by this banya)
+    for b in awaiting[:5]:
+        if not b.banya_confirmed:
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"✅ Подтвердить #{b.id}",
+                    callback_data=f"banya_confirm_{b.id}"
+                ),
+                InlineKeyboardButton(
+                    text=f"❌ Отклонить",
+                    callback_data=f"banya_reject_{b.id}"
+                ),
+            ])
 
-    if pending:
+    if awaiting:
         buttons.append([InlineKeyboardButton(
             text="📋 Все ожидающие",
             callback_data="owner_pending_bookings"

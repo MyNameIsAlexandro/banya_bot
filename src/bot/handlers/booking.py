@@ -8,7 +8,10 @@ from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from src.database import async_session, User, Banya, Booking, BathMaster, BookingStatus, BookingType
+from src.database import async_session, User, Banya, Booking, BathMaster, BookingStatus, BookingType, CancelledBy
+from src.bot.bot import bot
+from src.bot.services.notifications import NotificationService
+from src.bot.services.availability import get_available_slots
 
 router = Router(name="booking")
 
@@ -110,12 +113,29 @@ async def select_date(callback: CallbackQuery, state: FSMContext):
             await callback.answer("Баня не найдена", show_alert=True)
             return
 
-    # Generate time slots
-    slots = generate_time_slots(banya.opening_time, banya.closing_time, banya.min_hours)
+        # Generate time slots
+        all_slots = generate_time_slots(banya.opening_time, banya.closing_time, banya.min_hours)
+
+        # Filter out occupied slots
+        booking_date = datetime.fromisoformat(selected_date).date()
+        available_slots = await get_available_slots(
+            session, all_slots, banya_id, None, booking_date, banya.min_hours
+        )
+
+    if not available_slots:
+        await callback.message.edit_text(
+            f"😔 <b>К сожалению, все слоты на {selected_date} заняты.</b>\n\n"
+            "Пожалуйста, выберите другую дату.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Выбрать другую дату", callback_data=f"book_{banya_id}")]
+            ])
+        )
+        await callback.answer()
+        return
 
     buttons = []
     row = []
-    for slot in slots:
+    for slot in available_slots:
         row.append(InlineKeyboardButton(
             text=slot, callback_data=f"slot_{banya_id}_{selected_date}_{slot}"
         ))
@@ -129,10 +149,15 @@ async def select_date(callback: CallbackQuery, state: FSMContext):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    total_slots = len(all_slots)
+    available_count = len(available_slots)
+    availability_info = f"✅ Доступно {available_count} из {total_slots} слотов"
+
     await callback.message.edit_text(
         f"🕐 <b>Выберите время:</b>\n\n"
         f"📅 Дата: {selected_date}\n"
-        f"⏰ Работаем: {banya.opening_time} - {banya.closing_time}",
+        f"⏰ Работаем: {banya.opening_time} - {banya.closing_time}\n"
+        f"{availability_info}",
         reply_markup=keyboard,
     )
     await state.set_state(BookingStates.selecting_time)
@@ -618,17 +643,42 @@ async def master_select_date(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(selected_date=selected_date)
 
-    # Generate time slots (10:00 - 22:00 for home, banya hours for banya)
-    if data.get("location") == "home":
-        slots = generate_time_slots("10:00", "22:00", 2)
-    else:
-        async with async_session() as session:
-            banya = await session.get(Banya, data["banya_id"])
-            slots = generate_time_slots(banya.opening_time, banya.closing_time, banya.min_hours)
+    booking_date = datetime.fromisoformat(selected_date).date()
+    banya_id = data.get("banya_id")
+    duration = data.get("banya_min_hours", 2)
+
+    async with async_session() as session:
+        # Generate time slots (10:00 - 22:00 for home, banya hours for banya)
+        if data.get("location") == "home":
+            all_slots = generate_time_slots("10:00", "22:00", 2)
+            # For home visits, only check master availability
+            available_slots = await get_available_slots(
+                session, all_slots, None, master_id, booking_date, 2
+            )
+        else:
+            banya = await session.get(Banya, banya_id)
+            all_slots = generate_time_slots(banya.opening_time, banya.closing_time, banya.min_hours)
+            duration = banya.min_hours
+            # Check both banya and master availability
+            available_slots = await get_available_slots(
+                session, all_slots, banya_id, master_id, booking_date, duration
+            )
+
+    if not available_slots:
+        location_text = "на эту дату" if data.get("location") == "home" else f"в выбранной бане на {selected_date}"
+        await callback.message.edit_text(
+            f"😔 <b>К сожалению, все слоты {location_text} заняты.</b>\n\n"
+            "Мастер или баня уже забронированы. Пожалуйста, выберите другую дату.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Выбрать другую дату", callback_data=f"book_master_{master_id}")]
+            ])
+        )
+        await callback.answer()
+        return
 
     buttons = []
     row = []
-    for slot in slots:
+    for slot in available_slots:
         row.append(InlineKeyboardButton(
             text=slot, callback_data=f"mslot_{master_id}_{selected_date}_{slot}"
         ))
@@ -645,9 +695,14 @@ async def master_select_date(callback: CallbackQuery, state: FSMContext):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
+    total_slots = len(all_slots)
+    available_count = len(available_slots)
+    availability_info = f"✅ Доступно {available_count} из {total_slots} слотов"
+
     await callback.message.edit_text(
         f"🕐 <b>Выберите время:</b>\n\n"
-        f"📅 Дата: {selected_date}",
+        f"📅 Дата: {selected_date}\n"
+        f"{availability_info}",
         reply_markup=keyboard,
     )
     await state.set_state(MasterBookingStates.selecting_time)
@@ -906,51 +961,403 @@ async def finish_master_booking_message(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("confirm_booking_"))
 async def confirm_booking(callback: CallbackQuery, state: FSMContext):
-    """Confirm the booking."""
+    """Client confirms the booking - starts multi-party confirmation flow."""
     booking_id = int(callback.data.split("_")[2])
 
+    notifications = NotificationService(bot)
+
     async with async_session() as session:
-        booking = await session.get(Booking, booking_id)
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
         if not booking:
             await callback.answer("Бронирование не найдено", show_alert=True)
             return
 
-        booking.status = BookingStatus.CONFIRMED
-        await session.commit()
+        if booking.status != BookingStatus.PENDING:
+            await callback.answer("Бронирование уже обработано", show_alert=True)
+            return
 
-    # Different messages based on booking type
-    type_emoji = {
-        BookingType.BANYA_ONLY: "🧖",
-        BookingType.BANYA_WITH_MASTER: "🧖👨‍🍳",
-        BookingType.MASTER_AT_BANYA: "👨‍🍳🧖",
-        BookingType.MASTER_HOME_VISIT: "👨‍🍳🏠",
-    }
+        # Mark client as confirmed
+        booking.client_confirmed = True
 
-    emoji = type_emoji.get(booking.booking_type, "✅")
+        # Determine if we need confirmations from banya/master
+        needs_banya = booking.banya_id is not None
+        needs_master = booking.bath_master_id is not None
 
-    await callback.message.edit_text(
-        f"🎉 <b>Бронирование подтверждено!</b>\n\n"
-        f"{emoji} Номер брони: #{booking_id}\n\n"
-        "Мы отправим напоминание за день до визита.\n"
-        "Хорошего отдыха! 🔥"
-    )
+        if needs_banya or needs_master:
+            # Move to awaiting confirmations
+            booking.status = BookingStatus.AWAITING_CONFIRMATIONS
+
+            # Set initial confirmation states
+            if not needs_banya:
+                booking.banya_confirmed = True  # No banya - auto-confirm
+            if not needs_master:
+                booking.master_confirmed = None  # No master - null
+
+            await session.commit()
+            await session.refresh(booking)
+
+            # Send notifications to banya owner and/or master
+            await notifications.notify_awaiting_confirmations(booking)
+
+            # Build waiting message
+            waiting_for = []
+            if needs_banya:
+                waiting_for.append("бани")
+            if needs_master:
+                waiting_for.append("мастера")
+
+            await callback.message.edit_text(
+                f"⏳ <b>Ожидаем подтверждения</b>\n\n"
+                f"Ваш запрос отправлен. Ожидаем подтверждения от: {', '.join(waiting_for)}.\n\n"
+                f"📌 Номер брони: #{booking_id}\n\n"
+                "Мы уведомим вас о решении.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="❌ Отменить бронирование",
+                        callback_data=f"client_cancel_booking_{booking_id}"
+                    )]
+                ])
+            )
+        else:
+            # No confirmations needed (shouldn't happen normally)
+            booking.status = BookingStatus.CONFIRMED
+            await session.commit()
+
+            await callback.message.edit_text(
+                f"🎉 <b>Бронирование подтверждено!</b>\n\n"
+                f"📌 Номер брони: #{booking_id}\n\n"
+                "Мы отправим напоминание за день до визита.\n"
+                "Хорошего отдыха! 🔥"
+            )
+
     await state.clear()
-    await callback.answer("Бронирование подтверждено!")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("cancel_booking_"))
 async def cancel_booking(callback: CallbackQuery, state: FSMContext):
-    """Cancel the booking."""
+    """Cancel the booking during creation (by client)."""
     booking_id = int(callback.data.split("_")[2])
 
+    notifications = NotificationService(bot)
+
     async with async_session() as session:
-        booking = await session.get(Booking, booking_id)
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
         if booking:
             booking.status = BookingStatus.CANCELLED
+            booking.cancelled_by = CancelledBy.CLIENT
             await session.commit()
+
+            # Notify all participants if booking was already sent
+            if booking.client_confirmed:
+                await notifications.notify_all_booking_cancelled(
+                    booking, CancelledBy.CLIENT,
+                    exclude_telegram_id=callback.from_user.id
+                )
 
     await callback.message.edit_text("❌ Бронирование отменено.")
     await state.clear()
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("client_cancel_booking_"))
+async def client_cancel_booking(callback: CallbackQuery):
+    """Cancel the booking by client (after confirmation sent)."""
+    booking_id = int(callback.data.split("_")[3])
+
+    notifications = NotificationService(bot)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
+
+        if booking.status in [BookingStatus.CANCELLED, BookingStatus.COMPLETED]:
+            await callback.answer("Бронирование уже отменено или завершено", show_alert=True)
+            return
+
+        booking.status = BookingStatus.CANCELLED
+        booking.cancelled_by = CancelledBy.CLIENT
+        await session.commit()
+
+        # Notify all other participants
+        await notifications.notify_all_booking_cancelled(
+            booking, CancelledBy.CLIENT,
+            exclude_telegram_id=callback.from_user.id
+        )
+
+    await callback.message.edit_text(
+        f"❌ <b>Бронирование #{booking_id} отменено</b>\n\n"
+        "Все участники уведомлены об отмене."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("client_confirm_booking_"))
+async def client_confirm_booking_callback(callback: CallbackQuery, state: FSMContext):
+    """Handle client confirmation from notification."""
+    booking_id = int(callback.data.split("_")[3])
+    # Redirect to main confirm handler
+    callback.data = f"confirm_booking_{booking_id}"
+    await confirm_booking(callback, state)
+
+
+# ==================== BANYA CONFIRMATION ====================
+
+@router.callback_query(F.data.startswith("banya_confirm_"))
+async def banya_confirm_booking(callback: CallbackQuery):
+    """Banya owner confirms the booking."""
+    booking_id = int(callback.data.split("_")[2])
+
+    notifications = NotificationService(bot)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
+
+        if booking.status != BookingStatus.AWAITING_CONFIRMATIONS:
+            await callback.answer("Бронирование уже обработано", show_alert=True)
+            return
+
+        # Verify caller is banya owner
+        if not booking.banya or not booking.banya.owner:
+            await callback.answer("Ошибка доступа", show_alert=True)
+            return
+        if booking.banya.owner.telegram_id != callback.from_user.id:
+            await callback.answer("Вы не владелец этой бани", show_alert=True)
+            return
+
+        booking.banya_confirmed = True
+
+        # Check if all confirmations received
+        all_confirmed = booking.banya_confirmed
+        if booking.bath_master_id:
+            all_confirmed = all_confirmed and booking.master_confirmed
+
+        if all_confirmed:
+            booking.status = BookingStatus.CONFIRMED
+            await session.commit()
+            await session.refresh(booking)
+
+            # Notify client that booking is fully confirmed
+            await notifications.notify_client_booking_confirmed(booking)
+
+            await callback.message.edit_text(
+                f"✅ <b>Бронирование #{booking_id} подтверждено!</b>\n\n"
+                "Все участники подтвердили. Клиент уведомлён."
+            )
+        else:
+            await session.commit()
+            await callback.message.edit_text(
+                f"✅ <b>Вы подтвердили бронирование #{booking_id}</b>\n\n"
+                "⏳ Ожидаем подтверждения от мастера."
+            )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("banya_reject_"))
+async def banya_reject_booking(callback: CallbackQuery):
+    """Banya owner rejects the booking."""
+    booking_id = int(callback.data.split("_")[2])
+
+    notifications = NotificationService(bot)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
+
+        if booking.status in [BookingStatus.CANCELLED, BookingStatus.COMPLETED]:
+            await callback.answer("Бронирование уже отменено или завершено", show_alert=True)
+            return
+
+        booking.status = BookingStatus.CANCELLED
+        booking.cancelled_by = CancelledBy.BANYA
+        await session.commit()
+
+        # Notify all other participants
+        await notifications.notify_all_booking_cancelled(
+            booking, CancelledBy.BANYA,
+            exclude_telegram_id=callback.from_user.id
+        )
+
+    await callback.message.edit_text(
+        f"❌ <b>Бронирование #{booking_id} отклонено</b>\n\n"
+        "Клиент и мастер уведомлены."
+    )
+    await callback.answer()
+
+
+# ==================== MASTER CONFIRMATION ====================
+
+@router.callback_query(F.data.startswith("master_confirm_"))
+async def master_confirm_booking(callback: CallbackQuery):
+    """Bath master confirms the booking."""
+    # Skip if this is master_home_ or master_banya_ callbacks
+    if "master_home_" in callback.data or "master_banya_" in callback.data:
+        return
+
+    booking_id = int(callback.data.split("_")[2])
+
+    notifications = NotificationService(bot)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
+
+        if booking.status != BookingStatus.AWAITING_CONFIRMATIONS:
+            await callback.answer("Бронирование уже обработано", show_alert=True)
+            return
+
+        # Verify caller is the bath master
+        if not booking.bath_master or not booking.bath_master.user:
+            await callback.answer("Ошибка доступа", show_alert=True)
+            return
+        if booking.bath_master.user.telegram_id != callback.from_user.id:
+            await callback.answer("Вы не назначенный мастер", show_alert=True)
+            return
+
+        booking.master_confirmed = True
+
+        # Check if all confirmations received
+        all_confirmed = booking.master_confirmed
+        if booking.banya_id:
+            all_confirmed = all_confirmed and booking.banya_confirmed
+
+        if all_confirmed:
+            booking.status = BookingStatus.CONFIRMED
+            await session.commit()
+            await session.refresh(booking)
+
+            # Notify client that booking is fully confirmed
+            await notifications.notify_client_booking_confirmed(booking)
+
+            await callback.message.edit_text(
+                f"✅ <b>Бронирование #{booking_id} подтверждено!</b>\n\n"
+                "Все участники подтвердили. Клиент уведомлён."
+            )
+        else:
+            await session.commit()
+            await callback.message.edit_text(
+                f"✅ <b>Вы подтвердили бронирование #{booking_id}</b>\n\n"
+                "⏳ Ожидаем подтверждения от бани."
+            )
+
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("master_reject_"))
+async def master_reject_booking(callback: CallbackQuery):
+    """Bath master rejects the booking."""
+    # Skip if this is a different callback
+    if callback.data.startswith("master_reject_booking_"):
+        return
+
+    booking_id = int(callback.data.split("_")[2])
+
+    notifications = NotificationService(bot)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Booking)
+            .options(
+                selectinload(Booking.user),
+                selectinload(Booking.banya).selectinload(Banya.owner),
+                selectinload(Booking.bath_master).selectinload(BathMaster.user),
+            )
+            .where(Booking.id == booking_id)
+        )
+        booking = result.scalar_one_or_none()
+
+        if not booking:
+            await callback.answer("Бронирование не найдено", show_alert=True)
+            return
+
+        if booking.status in [BookingStatus.CANCELLED, BookingStatus.COMPLETED]:
+            await callback.answer("Бронирование уже отменено или завершено", show_alert=True)
+            return
+
+        booking.status = BookingStatus.CANCELLED
+        booking.cancelled_by = CancelledBy.BATH_MASTER
+        await session.commit()
+
+        # Notify all other participants
+        await notifications.notify_all_booking_cancelled(
+            booking, CancelledBy.BATH_MASTER,
+            exclude_telegram_id=callback.from_user.id
+        )
+
+    await callback.message.edit_text(
+        f"❌ <b>Бронирование #{booking_id} отклонено</b>\n\n"
+        "Клиент и баня уведомлены."
+    )
     await callback.answer()
 
 
@@ -993,6 +1400,7 @@ async def show_my_bookings(message: Message):
 
     status_emoji = {
         BookingStatus.PENDING: "⏳",
+        BookingStatus.AWAITING_CONFIRMATIONS: "🔄",
         BookingStatus.CONFIRMED: "✅",
         BookingStatus.CANCELLED: "❌",
         BookingStatus.COMPLETED: "✔️",
